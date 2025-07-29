@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import openpyxl
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl.styles.stylesheet')
 
 class App(tk.Tk):
     def __init__(self):
@@ -77,8 +80,6 @@ class App(tk.Tk):
                     **self.dimensions_data[article],
                     'quantity': qty
                 }
-
-        print(self.all_base)
         
     def calculate_pallets(self):
         try:
