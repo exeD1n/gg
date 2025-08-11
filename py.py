@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import openpyxl
 import warnings
 import os
@@ -9,30 +9,63 @@ warnings.filterwarnings("ignore", category=UserWarning, module='openpyxl.styles.
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Укладка мультипалет")
-        self.geometry("900x600")
+        self.title("Формирование мультипаллетов Eco2b | Ozon")
+        self.geometry("600x400")
+
+        icon = tk.PhotoImage(file="items/icon.png")
+        self.iconphoto(False, icon)
+
+        bottom_frame = tk.Frame(self)
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
+        self.progress_label = tk.Label(bottom_frame, text="", anchor="center")
+        self.progress_label.pack()
+
+        self.progress = ttk.Progressbar(bottom_frame, orient="horizontal", length=500, mode="determinate")
+        self.progress.pack(pady=2)
+        self.progress["maximum"] = 100
 
         self.ozon_data = {}        # Артикул -> кол-во
         self.dimensions_data = {}  # Артикул -> размеры
         self.all_base = {}         # Артикул -> всё вместе
 
-        ttk = tk.ttk if hasattr(tk, 'ttk') else tk
         tk.Button(self, text="Загрузить накладную с OZON", command=self.load_ozon_file).pack(pady=5)
 
         frame = tk.Frame(self)
         frame.pack(pady=5)
-        tk.Label(frame, text="Макс. высота палеты (см):").pack(side=tk.LEFT)
-        self.height_entry = tk.Entry(frame)
-        self.height_entry.insert(0, "205")
+
+        tk.Label(frame, text="Выберите машину:").pack(side=tk.LEFT, padx=(0,5))
+
+        # Словарь с машинами и их максимальной высотой
+        self.vehicles = {
+            "671 Isuzu Elf (водитель Караулов)": 175,
+            "696 Fusu (водитель Кузин)": 170,
+        }
+
+        # Создаем Combobox
+        self.vehicle_combo = ttk.Combobox(frame, values=list(self.vehicles.keys()), state="readonly")
+        self.vehicle_combo.current(0)  # Выбираем первую по умолчанию
+        self.vehicle_combo.pack(side=tk.LEFT)
+
+        # Поле для отображения высоты (только для показа, можно сделать disabled)
+        tk.Label(frame, text="Макс. высота палеты (см):").pack(side=tk.LEFT, padx=(15,5))
+        self.height_entry = tk.Entry(frame, width=5)
         self.height_entry.pack(side=tk.LEFT)
+        self.height_entry.insert(0, str(self.vehicles[self.vehicle_combo.get()]))
+
+        # При выборе машины обновляем высоту палеты
+        self.vehicle_combo.bind("<<ComboboxSelected>>", self.on_vehicle_selected)
 
         tk.Button(self, text="Рассчитать палеты", command=self.calculate_pallets).pack(pady=10)
 
-        self.result_text = tk.Text(self, height=25)
-        self.result_text.pack(fill=tk.BOTH, expand=True)
-
         # Автоматическая загрузка файла с размерами при запуске
         self.after(100, self.load_dimensions_file)
+
+    def on_vehicle_selected(self, event=None):
+        vehicle = self.vehicle_combo.get()
+        height = self.vehicles.get(vehicle, 205)
+        self.height_entry.delete(0, tk.END)
+        self.height_entry.insert(0, str(height))
 
     def load_ozon_file(self):
         path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
@@ -49,7 +82,7 @@ class App(tk.Tk):
         self.merge_data()
 
     def load_dimensions_file(self):
-        path = os.path.join(os.path.dirname(__file__), "размеры.xlsx")
+        path = os.path.join(os.path.dirname(__file__), "items/размеры.xlsx")
         if not os.path.exists(path):
             messagebox.showerror("Ошибка", f"Файл '{path}' не найден.\nПоложите его рядом с программой.")
             self.destroy()
@@ -82,7 +115,7 @@ class App(tk.Tk):
                 'extra': extra
             }
         self.merge_data()  # Чтобы объединить с ozon_data, если оно уже загружено
-
+        print(self.dimensions_data)
 
     def merge_data(self):
         self.all_base.clear()
@@ -92,7 +125,7 @@ class App(tk.Tk):
                     **self.dimensions_data[article],
                     'quantity': qty
                 }
-        
+    
     def calculate_pallets(self):
         try:
             max_height = float(self.height_entry.get() or 205)
@@ -102,7 +135,7 @@ class App(tk.Tk):
 
         base_pallet_width = 80
         base_pallet_length = 120
-        tolerance = 10
+        tolerance = 15  # оверхэнг 5 см с каждой стороны
 
         pallet_width = base_pallet_width + tolerance
         pallet_length = base_pallet_length + tolerance
@@ -112,6 +145,8 @@ class App(tk.Tk):
         items = deepcopy(self.all_base)
         for item in items.values():
             item['remaining'] = item['quantity']
+
+        packaging_priority = {'ж': 0, 'м': 1, 'ом': 2}
 
         def place_layer(layer_items):
             layer_plan = []
@@ -132,13 +167,17 @@ class App(tk.Tk):
                         if i < int(pallet_width) and j < int(pallet_length):
                             grid[i][j] = True
 
-            sorted_items = sorted(layer_items.items(), key=lambda x: -x[1]['remaining'])
+            sorted_articles = sorted(
+                layer_items.items(),
+                key=lambda x: (packaging_priority.get(x[1].get('extra', 'Ж'), 3), -x[1]['remaining'])
+            )
 
-            for article, data in sorted_items:
+            for article, data in sorted_articles:
                 w1, l1 = data['width'], data['length']
                 w2, l2 = l1, w1
                 count = data['remaining']
                 placed = 0
+
                 for rotation in [(w1, l1), (w2, l2)]:
                     w, l = rotation
                     for x in range(int(pallet_width - w) + 1):
@@ -154,8 +193,11 @@ class App(tk.Tk):
                                 })
                                 placed += 1
                                 count -= 1
-                layer_items[article]['remaining'] -= placed
-            return layer_plan
+
+                if placed > 0:
+                    layer_items[article]['remaining'] -= placed
+                    return layer_plan  # слой из одного артикула
+            return []
 
         pallets = []
         pallet_number = 1
@@ -174,7 +216,6 @@ class App(tk.Tk):
                     break
 
                 layer_plan = place_layer(layer_items)
-
                 if not layer_plan:
                     break
 
@@ -214,19 +255,37 @@ class App(tk.Tk):
                 'height': round(current_height, 2)
             })
             pallet_number += 1
-
-        self.result_text.delete(1.0, tk.END)
+            
         output = []
+        
+        packaging_priority = {'ж': 0, 'м': 1, 'ом': 2}
+        packaging_labels = {'ж': 'жёсткий слой', 'м': 'мягкий слой', 'ом': 'очень мягкий слой'}
+        
         for pallet in pallets:
-            self.result_text.insert(tk.END, f"Палета {pallet['pallet_number']}:\n")
             output.append(f"Палета {pallet['pallet_number']}:")
+
+            grouped_layers = {}
             for layer in pallet['layers']:
-                line = f"  - Артикул: {layer['article']}, Кол-во: {layer['count']}, Слой: {layer['layer']}"
-                self.result_text.insert(tk.END, line + "\n")
-                output.append(line)
+                grouped_layers.setdefault(layer['article'], []).append(layer)
+
+            sorted_layers = []
+            for article, layers in grouped_layers.items():
+                extra = self.dimensions_data.get(article, {}).get('extra', 'ж').lower()
+                priority = packaging_priority.get(extra, 3)
+                sorted_layers.append((priority, article, extra, layers))
+
+            sorted_layers.sort(key=lambda x: (x[0], x[1]))  # по жесткости, потом по артикулу
+
+            new_layer_number = 1
+            for _, article, extra, layers in sorted_layers:
+                label = packaging_labels.get(extra, 'неизвестная жёсткость')
+                for layer in layers:
+                    line = f"  - Артикул: {layer['article']}, Кол-во: {layer['count']}, Слой: {new_layer_number}  #{label}"
+                    output.append(line)
+                    new_layer_number += 1
+
             info_line = f"  Общий вес: {pallet['weight']} кг | Занятая высота: {pallet['height']} см\n"
-            self.result_text.insert(tk.END, info_line + "\n")
-            output.append(info_line)
+            output.append(info_line.strip())
 
         try:
             with open("результат_укладки.txt", "w", encoding="utf-8") as f:
@@ -234,7 +293,8 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить файл:\n{e}")
         else:
-            messagebox.showinfo("Готово", "Результат сохранён в файл 'результат_укладки.txt'.")
+            messagebox.showinfo(tk.END, "Готово, результат сохранён в файл 'результат_укладки.txt'.\n")
+
 
 if __name__ == "__main__":
     app = App()
